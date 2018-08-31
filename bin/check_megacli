@@ -2,6 +2,7 @@
 
 # Example script using pymegacli which is suitable for invocation by nagios
 
+from __future__ import print_function
 import argparse
 import os
 import sys
@@ -31,10 +32,38 @@ def main():
         action='append',
         help='Subsystems to check. If not passed, defaults to all'
     )
+    parser.add_argument(
+        '--led',
+        action='store_true',
+        help='Use libstoragemgmt (megaraid plugin) to toggle the fault led on unhealthy disks'
+    )
+    parser.set_defaults(led=False)
     args = parser.parse_args()
 
     if os.geteuid() != 0:
         parser.error('Must run as root!')
+
+    if args.led:
+        try:
+            import lsm
+            try:
+                import lsm.plugin.megaraid
+                HAVE_LSM_MEGARAID = True
+            except:
+                HAVE_LSM_MEGARAID = False
+                print(
+                    "--led specified but libstoragemgmt megaraid plugin was not found, install like so on Fedora/CentOS... :\n"
+                    "\tyum install libstoragemgmt-megaraid-plugin",
+                    file=sys.stderr
+                )
+        except ImportError:
+            HAVE_LSM_MEGARAID = False
+            print(
+                "--led specified but libstoragemgmt module was not found, install like so on Fedora/CentOS... :\n"
+                "\tyum install libstoragemgmt libstoragemgmt-megaraid-plugin",
+                file=sys.stderr
+            )
+
 
     checks = {}
     for check in CHECKS:
@@ -50,14 +79,20 @@ def main():
     }
 
     def check_component(component):
+        component_identifier = component.identifier
+        if isinstance(component, pymegacli.components.Disk):
+            component_identifier = component_identifier + ' - ' + component.devnode
+
         if component.healthy:
-            messages[OK].append('%s is healthy' % component.identifier)
+            messages[OK].append('%s is healthy' % component_identifier)
+            return OK
         else:
             for message in component.health_messages:
                 messages[CRITICAL].append('%s %s' % (
-                    component.identifier,
+                    component_identifier,
                     message
                 ))
+            return CRITICAL
 
     controllers = list(connection.controllers)
     if not controllers:
@@ -66,10 +101,19 @@ def main():
         for controller in controllers:
             if checks['PD']:
                 for disk in controller.PDs:
-                    check_component(disk)
+                    disk_health = check_component(disk)
+                    if args.led and HAVE_LSM_MEGARAID:
+                        try:
+                            if CRITICAL == disk_health:
+                                lsm.LocalDisk.fault_led_on(disk.devnode)
+                            else:
+                                lsm.LocalDisk.fault_led_off(disk.devnode)
+                        except:
+                            print('Couldn\'t manipulate enclosure LED', file=sys.stderr)
+
             if checks['LD']:
                 for logical_device in controller.LDs:
-                    check_component(disk)
+                    check_component(logical_device)
                     if 'WriteBack' not in logical_device['Current Cache Policy']:
                         messages[WARNING].append('%s has cache policy %s, which does not include WriteBack' % (
                             logical_device.identifier,
@@ -82,16 +126,16 @@ def main():
                         messages[WARNING].append('%s is in learn cycle' % bbu.identifier)
 
     if messages[CRITICAL]:
-        print 'CRITICAL: %s' % '; '.join(messages[CRITICAL])
+        print('CRITICAL: %s' % '; '.join(messages[CRITICAL]))
         return CRITICAL
     elif messages[WARNING]:
-        print 'WARNING: %s' % '; '.join(messages[WARNING])
+        print('WARNING: %s' % '; '.join(messages[WARNING]))
         return WARNING
     elif messages[UNKNOWN]:
-        print 'UNKNOWN: %s' % '; '.join(messages[UNKNOWN])
+        print('UNKNOWN: %s' % '; '.join(messages[UNKNOWN]))
         return UNKNOWN
     else:
-        print 'OK: %s' % '; '.join(messages[OK])
+        print('OK: %s' % '; '.join(messages[OK]))
         return OK
 
 
