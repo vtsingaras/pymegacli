@@ -1,6 +1,7 @@
 import pipes
 import subprocess
 import re
+import os
 
 from .parser import BlockParser
 from .parser import bail_on
@@ -131,20 +132,22 @@ class Disk(Component):
         'Predictive Failure Count',
     )
     ERROR_BOOL_KEYS = ('Drive has flagged a S.M.A.R.T alert', )
-    REQUIRED_FIELDS = ('Enclosure Device ID', 'Slot Number')
+    REQUIRED_FIELDS = ('Enclosure Device ID', 'Slot Number', 'WWN')
 
     PARSER = BlockParser(rules=[
         once_per_block(colon_field('Enclosure Device ID', int_or_na)),
         rule(colon_field('Slot Number', int)),
+        rule(colon_field('WWN', str)),
         rule(colon_field('Other Error Count', int)),
         rule(colon_field('Predictive Failure Count', int)),
         rule(colon_field('Media Error Count', int)),
         rule(colon_field('Drive has flagged a S.M.A.R.T alert', yesnobool)),
     ], default_constructor=colon_field(None, str))
 
-    def __init__(self, enclosure_id, slot_number, parent, props=None):
+    def __init__(self, enclosure_id, slot_number, wwn, parent, props=None):
         self.enclosure_id = enclosure_id
         self.slot_number = slot_number
+        self.wwn = wwn
         self.thresholds = dict(
             (k, 0)
             for k
@@ -158,6 +161,11 @@ class Disk(Component):
     @property
     def identifier(self):
         return 'PhysDrv [%d:%d]' % (self.enclosure_id, self.slot_number)
+
+    @property
+    def devnode(self):
+        disk_by_id_path = "/dev/disk/by-id/wwn-0x%s" % self.wwn
+        return os.path.realpath(disk_by_id_path)
 
     @property
     def health_status(self):
