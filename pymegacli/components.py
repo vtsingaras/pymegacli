@@ -2,6 +2,7 @@ import pipes
 import subprocess
 import re
 import os
+import glob
 
 from .parser import BlockParser
 from .parser import bail_on
@@ -147,7 +148,14 @@ class Disk(Component):
     def __init__(self, enclosure_id, slot_number, wwn, parent, props=None):
         self.enclosure_id = enclosure_id
         self.slot_number = slot_number
-        self.wwn = wwn
+        self.wwn = wwn.lower()
+        disk_by_id_path_glob = "/dev/disk/by-id/wwn-0x%s?" % self.wwn[:-1]
+        disk_by_id_path_glob_results = glob.glob(disk_by_id_path_glob)
+        if len(disk_by_id_path_glob_results) == 1:
+            self.linux_disk_by_id = disk_by_id_path_glob_results[0]
+        else:
+            self.linux_disk_by_id = None
+
         self.thresholds = dict(
             (k, 0)
             for k
@@ -160,12 +168,14 @@ class Disk(Component):
 
     @property
     def identifier(self):
-        return 'PhysDrv [%d:%d]' % (self.enclosure_id, self.slot_number)
+        return 'PhysDrv [%d:%d] WWN: %s Dev: %s' % (self.enclosure_id, self.slot_number, self.wwn, self.devnode)
 
     @property
     def devnode(self):
-        disk_by_id_path = "/dev/disk/by-id/wwn-0x%s" % self.wwn
-        return os.path.realpath(disk_by_id_path)
+        if self.linux_disk_by_id:
+            return os.path.realpath(self.linux_disk_by_id)
+        else:
+            return None
 
     @property
     def health_status(self):
